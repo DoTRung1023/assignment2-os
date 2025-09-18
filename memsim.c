@@ -1,4 +1,4 @@
-#include <stdio.h>
+git#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -25,12 +25,16 @@ typedef struct {
 typedef struct {
 	int pageNo;     // -1 if free
 	int modified;   // dirty bit
+	int last_access_time;  // For LRU tracking
+	int reference_bit;     // For Clock algorithm
 } frame_table_entry;
 
 page_table_entry *page_table = NULL;
 frame_table_entry *frame_table = NULL;
 int max_pages = 1 << (32 - 12); // 32-bit address space, 4KB pages
 int allocated = 0;
+int access_counter = 0;  // Global counter for LRU tracking
+int clock_hand = 0;      // Clock hand position for Clock algorithm
 
 /* Creates the page table structure to record memory allocation */
 int     createMMU (int frames)
@@ -51,6 +55,8 @@ int     createMMU (int frames)
 	for (int i = 0; i < frames; i++) {
 		frame_table[i].pageNo = -1;
 		frame_table[i].modified = 0;
+		frame_table[i].last_access_time = 0;
+		frame_table[i].reference_bit = 0;
 	}
 	allocated = 0;
 	return 0;
@@ -63,6 +69,11 @@ int     checkInMemory( int page_number)
 	if (page_number < 0 || page_number >= max_pages) return -1;
 	if (page_table[page_number].valid) {
 		result = page_table[page_number].frameNo;
+		// Update access time for LRU tracking
+		access_counter++;
+		frame_table[result].last_access_time = access_counter;
+		// Set reference bit for Clock algorithm
+		frame_table[result].reference_bit = 1;
 	}
 	return result;
 }
@@ -73,8 +84,11 @@ int     allocateFrame( int page_number)
 	// Find a free frame
 	for (int i = 0; i < numFrames; i++) {
 		if (frame_table[i].pageNo == -1) {
-			frame_table[i].pageNo = page_number;
-			frame_table[i].modified = 0;
+		frame_table[i].pageNo = page_number;
+		frame_table[i].modified = 0;
+		access_counter++;
+		frame_table[i].last_access_time = access_counter;
+		frame_table[i].reference_bit = 1;
 			page_table[page_number].frameNo = i;
 			page_table[page_number].valid = 1;
 			page_table[page_number].modified = 0;
@@ -89,7 +103,7 @@ int     allocateFrame( int page_number)
 page    selectVictim(int page_number, enum repl  mode )
 {
 	page victim;
-	// Only implement random replacement
+	
 	if (mode == rand_repl) {
 		int victim_frame = rand() % numFrames;
 		int victim_page = frame_table[victim_frame].pageNo;
@@ -106,7 +120,86 @@ page    selectVictim(int page_number, enum repl  mode )
 		page_table[page_number].modified = 0;
 		return victim;
 	}
-	// Default: return dummy
+
+	else if (mode == lru) {
+		// Find frame with smallest (oldest) last_access_time
+		int oldest_time = frame_table[0].last_access_time;
+		int victim_frame = 0;
+		
+		for (int i = 1; i < numFrames; i++) {
+			if (frame_table[i].last_access_time < oldest_time) {
+				oldest_time = frame_table[i].last_access_time;
+				victim_frame = i;
+			}
+		}
+		
+		int victim_page = frame_table[victim_frame].pageNo;
+		victim.pageNo = victim_page;
+		victim.modified = frame_table[victim_frame].modified;
+		
+		// Invalidate victim in page table
+		page_table[victim_page].valid = 0;
+		page_table[victim_page].frameNo = -1;
+		
+		// Replace with new page
+		frame_table[victim_frame].pageNo = page_number;
+		frame_table[victim_frame].modified = 0;
+		access_counter++;
+		frame_table[victim_frame].last_access_time = access_counter;
+		page_table[page_number].frameNo = victim_frame;
+		page_table[page_number].valid = 1;
+		page_table[page_number].modified = 0;
+		
+		return victim;
+	}
+	
+	else if (mode == clock) {
+		// Clock algorithm: find first frame with reference bit 0
+		int start_hand = clock_hand;
+		int victim_frame = -1;
+		
+		// First pass: look for frame with reference bit 0
+		do {
+			if (frame_table[clock_hand].reference_bit == 0) {
+				victim_frame = clock_hand;
+				break;
+			} else {
+				// Clear reference bit and move to next frame
+				frame_table[clock_hand].reference_bit = 0;
+			}
+			clock_hand = (clock_hand + 1) % numFrames;
+		} while (clock_hand != start_hand);
+		
+		// If no frame found with reference bit 0, use current position
+		if (victim_frame == -1) {
+			victim_frame = clock_hand;
+		}
+		
+		int victim_page = frame_table[victim_frame].pageNo;
+		victim.pageNo = victim_page;
+		victim.modified = frame_table[victim_frame].modified;
+		
+		// Invalidate victim in page table
+		page_table[victim_page].valid = 0;
+		page_table[victim_page].frameNo = -1;
+		
+		// Replace with new page
+		frame_table[victim_frame].pageNo = page_number;
+		frame_table[victim_frame].modified = 0;
+		frame_table[victim_frame].reference_bit = 1;
+		access_counter++;
+		frame_table[victim_frame].last_access_time = access_counter;
+		page_table[page_number].frameNo = victim_frame;
+		page_table[page_number].valid = 1;
+		page_table[page_number].modified = 0;
+		
+		// Move clock hand to next position
+		clock_hand = (clock_hand + 1) % numFrames;
+		
+		return victim;
+	}
+	
+	// Default: return dummy (for unimplemented algorithms)
 	victim.pageNo = 0;
 	victim.modified = 0;
 	return victim;
