@@ -1,68 +1,127 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 
 typedef struct {
         int pageNo;
         int modified;
 } page;
-enum    repl { random, fifo, lru, clock};
+enum    repl { rand_repl, fifo, lru, clock};
 int     createMMU( int);
 int     checkInMemory( int ) ;
 int     allocateFrame( int ) ;
 page    selectVictim( int, enum repl) ;
 const   int pageoffset = 12;            /* Page size is fixed to 4 KB */
+
 int     numFrames ;
+typedef struct {
+	int pageNo;
+	int frameNo;
+	int valid;      // 1 if in memory, 0 if not
+	int modified;   // dirty bit
+} page_table_entry;
+
+typedef struct {
+	int pageNo;     // -1 if free
+	int modified;   // dirty bit
+} frame_table_entry;
+
+page_table_entry *page_table = NULL;
+frame_table_entry *frame_table = NULL;
+int max_pages = 1 << (32 - 12); // 32-bit address space, 4KB pages
+int allocated = 0;
 
 /* Creates the page table structure to record memory allocation */
 int     createMMU (int frames)
 {
-
-        // to do
-
-        return 0;
+	numFrames = frames;  // Ensure global variable matches parameter
+	
+	// Allocate and initialize page table and frame table
+	page_table = (page_table_entry*)malloc(sizeof(page_table_entry) * max_pages);
+	if (!page_table) return -1;
+	for (int i = 0; i < max_pages; i++) {
+		page_table[i].pageNo = i;
+		page_table[i].frameNo = -1;
+		page_table[i].valid = 0;
+		page_table[i].modified = 0;
+	}
+	frame_table = (frame_table_entry*)malloc(sizeof(frame_table_entry) * frames);
+	if (!frame_table) return -1;
+	for (int i = 0; i < frames; i++) {
+		frame_table[i].pageNo = -1;
+		frame_table[i].modified = 0;
+	}
+	allocated = 0;
+	return 0;
 }
 
 /* Checks for residency: returns frame no or -1 if not found */
 int     checkInMemory( int page_number)
 {
-        int     result = -1;
-
-        // to do
-
-
-        return result ;
+	int result = -1;
+	if (page_number < 0 || page_number >= max_pages) return -1;
+	if (page_table[page_number].valid) {
+		result = page_table[page_number].frameNo;
+	}
+	return result;
 }
 
 /* allocate page to the next free frame and record where it put it */
 int     allocateFrame( int page_number)
 {
-        // to do
-        return;
+	// Find a free frame
+	for (int i = 0; i < numFrames; i++) {
+		if (frame_table[i].pageNo == -1) {
+			frame_table[i].pageNo = page_number;
+			frame_table[i].modified = 0;
+			page_table[page_number].frameNo = i;
+			page_table[page_number].valid = 1;
+			page_table[page_number].modified = 0;
+			return i;
+		}
+	}
+	// No free frame found (should not happen if called correctly)
+	return -1;
 }
 
 /* Selects a victim for eviction/discard according to the replacement algorithm,  returns chosen frame_no  */
 page    selectVictim(int page_number, enum repl  mode )
 {
-        page    victim;
-        // to do 
-        victim.pageNo = 0;
-        victim.modified = 0;
-        return (victim) ;
+	page victim;
+	// Only implement random replacement
+	if (mode == rand_repl) {
+		int victim_frame = rand() % numFrames;
+		int victim_page = frame_table[victim_frame].pageNo;
+		victim.pageNo = victim_page;
+		victim.modified = frame_table[victim_frame].modified;
+		// Invalidate victim in page table
+		page_table[victim_page].valid = 0;
+		page_table[victim_page].frameNo = -1;
+		// Replace with new page
+		frame_table[victim_frame].pageNo = page_number;
+		frame_table[victim_frame].modified = 0;
+		page_table[page_number].frameNo = victim_frame;
+		page_table[page_number].valid = 1;
+		page_table[page_number].modified = 0;
+		return victim;
+	}
+	// Default: return dummy
+	victim.pageNo = 0;
+	victim.modified = 0;
+	return victim;
 }
 
 		
-main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
   
 	char	*tracename;
 	int	page_number,frame_no, done ;
-	int	do_line, i;
+	int	do_line;
 	int	no_events, disk_writes, disk_reads;
 	int     debugmode;
  	enum	repl  replace;
-	int	allocated=0; 
-	int	victim_page;
         unsigned address;
     	char 	rw;
 	page	Pvictim;
@@ -85,14 +144,14 @@ main(int argc, char *argv[])
             printf( "Frame number must be at least 1\n");
             exit ( -1);
         }
-        if (strcmp(argv[3], "lru\0") == 0)
-            replace = lru;
-	    else if (strcmp(argv[3], "rand\0") == 0)
-	     replace = random;
-	          else if (strcmp(argv[3], "clock\0") == 0)
-                       replace = clock;		 
-	               else if (strcmp(argv[3], "fifo\0") == 0)
-                             replace = fifo;		 
+		if (strcmp(argv[3], "lru\0") == 0)
+			replace = lru;
+		else if (strcmp(argv[3], "rand\0") == 0)
+			replace = rand_repl;
+		else if (strcmp(argv[3], "clock\0") == 0)
+			replace = clock;
+		else if (strcmp(argv[3], "fifo\0") == 0)
+			replace = fifo;
         else 
 	  {
              printf( "Replacement algorithm must be rand/fifo/lru/clock  \n");
@@ -151,8 +210,15 @@ main(int argc, char *argv[])
 		    if (debugmode) printf( "reading    %8d \n", page_number) ;
 		}
 		else if ( rw == 'W'){
-		    // mark page in page table as written - modified  
-		    if (debugmode) printf( "writting   %8d \n", page_number) ;
+			// mark page in page table and frame table as written - modified
+			if (page_table[page_number].valid) {
+				page_table[page_number].modified = 1;
+				int frame = page_table[page_number].frameNo;
+				if (frame >= 0 && frame < numFrames) {
+					frame_table[frame].modified = 1;
+				}
+			}
+			if (debugmode) printf( "writting   %8d \n", page_number) ;
 		}
 		 else {
 		      printf( "Badly formatted file. Error on line %d\n", no_events+1); 
