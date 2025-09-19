@@ -7,7 +7,7 @@ typedef struct {
         int pageNo;
         int modified;
 } page;
-enum    repl { rand_repl, fifo, lru, clock};
+enum    repl { rand_repl, lru, clock};
 int     createMMU( int);
 int     checkInMemory( int ) ;
 int     allocateFrame( int ) ;
@@ -243,11 +243,9 @@ int main(int argc, char *argv[])
 			replace = rand_repl;
 		else if (strcmp(argv[3], "clock\0") == 0)
 			replace = clock;
-		else if (strcmp(argv[3], "fifo\0") == 0)
-			replace = fifo;
         else 
 	  {
-             printf( "Replacement algorithm must be rand/fifo/lru/clock  \n");
+             printf( "Replacement algorithm must be rand/lru/clock  \n");
              exit ( -1);
 	  }
 
